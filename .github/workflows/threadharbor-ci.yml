@@ -1,0 +1,79 @@
+name: ThreadHarbor independent CI
+
+on:
+  pull_request:
+    paths:
+      - 'app/**'
+      - 'ci/**'
+      - 'tests/**'
+      - 'build.gradle.kts'
+      - 'settings.gradle.kts'
+      - 'gradle.properties'
+      - '.github/workflows/threadharbor-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - 'ci/**'
+      - 'tests/**'
+      - 'build.gradle.kts'
+      - 'settings.gradle.kts'
+      - 'gradle.properties'
+      - '.github/workflows/threadharbor-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: threadharbor-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fixture-unit-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Exercise controlled fixture and reader protocol regressions
+        run: |
+          node tests/fixture.test.cjs
+          node tests/reader.test.cjs
+
+  android-debug:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+      - name: Install Android SDK platform
+        run: |
+          set -eu
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          SDKMGR="$(find "$SDK_ROOT/cmdline-tools" -type f -name sdkmanager -print -quit)"
+          test -n "$SDKMGR"
+          "$SDKMGR" --install 'platforms;android-36' 'build-tools;35.0.0'
+      - name: Android unit tests and debug APK
+        run: gradle --no-daemon --stacktrace :app:testDebugUnitTest :app:assembleDebug
+      - name: Verify artifact and record checksum
+        run: |
+          set -eu
+          test -s app/build/outputs/apk/debug/app-debug.apk
+          sha256sum app/build/outputs/apk/debug/app-debug.apk > APK-SHA256.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ThreadHarbor-source-head-debug-apk
+          path: |
+            app/build/outputs/apk/debug/app-debug.apk
+            APK-SHA256.txt
+          if-no-files-found: error
+          retention-days: 7
